@@ -6,20 +6,6 @@ import functools
 WIKIPEDIA_API_URL = 'https://en.wikipedia.org/w/api.php'
 
 
-def allow_retry(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        for _ in range(MAX_RETRY):
-            try:
-                return func(*args, **kwargs)
-            except requests.exceptions.ConnectionError:
-                print('ConnectionError')
-                time.sleep(CONNECTION_ERROR_SLEEP)
-        print('Max retry exceeded')
-        raise requests.exceptions.ConnectionError
-    return wrapper
-
-
 def params_info(
     titles: Union[str, List[str]] = None,
     pageids: Union[int, List[int]] = None,
@@ -124,7 +110,7 @@ def params_links(
     """
     Returns all links from the given pages.
 
-    Example https://en.wikipedia.org/w/api.php?action=query&format=json&generator=links&titles=Algebra&prop=info
+    Example https://en.wikipedia.org/w/api.php?action=query&format=json&prop=links&titles=Algebra&
     """
     assert (titles is None) ^ (pageids is None), 'Either titles or pageids must be specified.'
     params = {
@@ -265,9 +251,8 @@ def params_mostviewed():
     return params
 
 
-def params_content(
-    titles: Union[str, List[str]] = None, 
-    pageids: Union[int, List[int]] = None,
+def params_content_parse(
+    page: str = None,
     prop: Literal['text', 'wikitext'] = None
 ):
     """
@@ -275,13 +260,11 @@ def params_content(
 
     Example https://en.wikipedia.org/w/api.php?action=parse&format=json&page=Algebra&prop=text&formatversion=2
     """
-    assert (titles is None) ^ (pageids is None), 'Either titles or pageids must be specified.'
     params = {
         'action': 'query',
         'format': 'json',
         'prop': prop,
-        'titles': titles,
-        'pageids': pageids,
+        'page': page,
     }
     params = {k: v for k, v in params.items() if v is not None}
     return params
@@ -292,6 +275,7 @@ def params_content_extracts(
     pageids: Union[int, List[int]] = None,
     exchars: int = None,
     exsentences: int = 'max',
+    exlimit: int = 'max',
 ):
     """
     Returns content of given pages, as extracts.
@@ -309,7 +293,8 @@ def params_content_extracts(
         'pageids': pageids,
         'exchars': exchars,
         'exsentences': exsentences,
-        'exlimit': 1,
+        'exintro': None if isinstance(titles, str) or isinstance(pageids, int) else "",
+        'exlimit': exlimit,
         'explaintext': 1,
         'formatversion': 2,
     }

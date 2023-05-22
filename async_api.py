@@ -1,21 +1,48 @@
 import asyncio
 import aiohttp
 from typing import Dict, Any
+import warnings
 
 from .api_params import *
 from .exception import WikiError
+from ratelimit import rate_limit
 
 
+def _merge_results(result, more):
+    if isinstance(result, dict):
+        for k, v in more.items():
+            if k not in result:
+                result[k] = v
+            else:
+                _merge_results(result[k], v)
+    elif isinstance(result, list):
+        result.extend(more)
+    else:
+        pass
+
+
+@rate_limit(rps=100)
 async def _aiohttp_get(params):
     async with aiohttp.ClientSession() as session:
         params = {k: str('|').join(map(str, v)) if isinstance(v, list) else v for k, v in params.items()}
         async with session.get(WIKIPEDIA_API_URL, params=params) as resp:
-            print(resp.url)
-            result = await resp.json()
-    if 'error' in result:
-        raise WikiError(result['error'])
+            return await resp.json()    
+
+
+async def _get_till_complete(params):
+    result = {}
+    while True:
+        resp_json = await _aiohttp_get(params)
+        _merge_results(result, resp_json)
+        if 'error' in resp_json:
+            raise WikiError(resp_json['error'])
+        if 'warnings' in resp_json:
+            warnings.warn(resp_json['warnings'])
+        if 'continue' not in resp_json:
+            break
+        params.update(resp_json['continue'])
     return result
-    
+
 
 async def query_info_async(
     titles: Union[str, List[str]] = None,
@@ -26,7 +53,7 @@ async def query_info_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=info&titles=Algebra
     """
     params = params_info(titles, pageids, inprop)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -42,7 +69,7 @@ async def query_categorymembers_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtype=subcat&cmtitle=Category:Algebra&cmlimit=max
     """
     params = params_categorymembers(cmtitle, cmpageid, cmtype, cmlimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['categorymembers']
 
 
@@ -57,7 +84,7 @@ async def query_categories_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=categories&titles=Algebra
     """
     params = params_categories(titles, pageids, cllimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -74,7 +101,7 @@ async def query_iwlinks_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=iwlinks&titles=Algebra&iwlimit=max
     """
     params = params_iwlinks(titles, pageids, iwprefix, iwnamespace, iwlimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -90,7 +117,7 @@ async def query_extlinks_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extlinks&titles=Algebra&ellimit=max
     """
     params = params_extlinks(titles, pageids, elprotocol, ellimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -106,7 +133,7 @@ async def query_links_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=links&titles=Algebra&pllimit=max
     """
     params = params_links(titles, pageids, plnamespace, pllimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -123,7 +150,7 @@ async def query_linkshere_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&list=linkshere&titles=Algebra&lhlimit=max
     """
     params = params_linkshere(titles, pageids, lhnamespace, lhshow, lhlimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -138,7 +165,7 @@ async def query_images_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=images&titles=Algebra&imlimit=max
     """
     params = params_images(titles, pageids, imlimit)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -153,7 +180,7 @@ async def query_pageviews_async(
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageviews&titles=Algebra&pvipdays=30
     """
     params = params_pageviews(titles, pageids, pvipdays)
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -164,7 +191,7 @@ async def query_siteviews() -> Dict[str, int]:
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&meta=siteviews&sites=en.wikipedia&pvipdays=30
     """
     params = params_siteviews()
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['siteviews']
 
 
@@ -175,13 +202,12 @@ async def query_mostviewed() -> List[Dict[str, Any]]:
     Example: https://en.wikipedia.org/w/api.php?action=query&format=json&list=mostviewed
     """
     params = params_mostviewed()
-    result = await _aiohttp_get(params)
+    result = await _get_till_complete(params)
     return result['query']['mostviewed']
 
 
-async def query_content(
-    titles: Union[str, List[str]] = None, 
-    pageids: Union[int, List[int]] = None,
+async def query_content_parse(
+    page: str = None,
     prop: Literal['text', 'wikitext'] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
@@ -189,8 +215,8 @@ async def query_content(
 
     Example: https://en.wikipedia.org/w/api.php?action=parse&format=json&page=Algebra&prop=text&formatversion=2
     """
-    params = params_content(titles, pageids, prop)
-    result = await _aiohttp_get(params)
+    params = params_content_parse(page, prop)
+    result = await _get_till_complete(params)
     return result['query']['pages']
 
 
@@ -203,8 +229,8 @@ async def query_content_extracts(
     """
     Get extracts for the given pages.
 
-    Example: https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exsentences=10&exlimit=1&titles=Pet_door&explaintext=1&formatversion=2
+    Example: https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exsentences=10&exlimit=1&titles=Algebra&explaintext=1&formatversion=2
     """
     params = params_content_extracts(titles, pageids, exchars, exsentences)
-    result = await _aiohttp_get(params)
-    return result['query']['pages']
+    result = await _get_till_complete(params)
+    return {str(page['pageid']): page for page in result['query']['pages']}
